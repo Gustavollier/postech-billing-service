@@ -1,0 +1,8 @@
+**/bin/
+**/obj/
+**/.git/
+**/.github/
+**/*.user
+tests/
+k8s/
+docs/

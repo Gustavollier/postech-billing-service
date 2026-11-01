@@ -1,0 +1,157 @@
+name: CI/CD - Billing Service
+
+# Pipeline independente deste microsserviço, como a fase pede: build, testes,
+# qualidade e deploy. Autenticação na Azure por OIDC, sem segredo de nuvem
+# versionado.
+
+on:
+  push:
+    branches: [main, develop]
+    paths-ignore: ["**.md", "docs/**"]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: "8.0.x"
+  ACR_NAME: postechacr13soat
+  IMAGE_NAME: billing-service
+  RESOURCE_GROUP: pos-tech-fiap
+  CLUSTER_NAME: postech-aks
+  NAMESPACE: postechallenge
+  COBERTURA_MINIMA: 80
+
+permissions:
+  contents: read
+
+jobs:
+  build-e-testes:
+    name: Build, testes e cobertura
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # O Sonar precisa do histórico para atribuir código novo a quem
+          # escreveu; com clone raso ele reporta tudo como novo.
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build -c Release --no-restore
+
+      # Os testes de integração sobem MongoDB de verdade via Testcontainers. O
+      # runner do GitHub já tem Docker, então rodam aqui iguais à máquina de
+      # quem desenvolve — o que importa provar é o outbox embutido no
+      # documento, e dublê não prova atomicidade de escrita.
+      - name: Testes com cobertura
+        run: |
+          dotnet test -c Release --no-build \
+            --collect:"XPlat Code Coverage" \
+            --results-directory ./cobertura \
+            --logger "trx;LogFileName=testes.trx"
+
+      - name: Relatório de cobertura
+        uses: danielpalme/ReportGenerator-GitHub-Action@5.4.1
+        with:
+          reports: ./cobertura/**/coverage.cobertura.xml
+          targetdir: ./cobertura/relatorio
+          reporttypes: Html;MarkdownSummaryGithub;Cobertura
+
+      - name: Publicar o resumo no run
+        run: cat ./cobertura/relatorio/SummaryGithub.md >> "$GITHUB_STEP_SUMMARY"
+
+      # O gate. Na Fase 3 a cobertura era medida e ignorada; aqui ela reprova.
+      - name: Gate de cobertura
+        run: |
+          linha=$(grep -oP 'line-rate="\K[0-9.]+' ./cobertura/relatorio/Cobertura.xml | head -1)
+          pct=$(python3 -c "print(round(float('$linha') * 100, 2))")
+          echo "Cobertura de linha: $pct%"
+          echo "Cobertura de linha: **$pct%**" >> "$GITHUB_STEP_SUMMARY"
+          if python3 -c "import sys; sys.exit(0 if float('$pct') >= ${{ env.COBERTURA_MINIMA }} else 1)"; then
+            echo "Acima do mínimo de ${{ env.COBERTURA_MINIMA }}%."
+          else
+            echo "::error::Cobertura de $pct% abaixo do mínimo de ${{ env.COBERTURA_MINIMA }}%."
+            exit 1
+          fi
+
+      - name: Guardar o relatório
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cobertura-billing-service
+          path: ./cobertura/relatorio
+
+  qualidade:
+    name: SonarCloud
+    runs-on: ubuntu-latest
+    # Sem o segredo configurado o job é pulado em vez de reprovar o PR de quem
+    # não tem acesso à organização do Sonar.
+    if: ${{ !github.event.pull_request.head.repo.fork }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Análise
+        if: env.SONAR_TOKEN != ''
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          dotnet tool install --global dotnet-sonarscanner
+          dotnet sonarscanner begin \
+            /k:"Gustavollier_postech-billing-service" \
+            /o:"gustavollier" \
+            /d:sonar.token="$SONAR_TOKEN" \
+            /d:sonar.host.url="https://sonarcloud.io"
+          dotnet build -c Release
+          dotnet sonarscanner end /d:sonar.token="$SONAR_TOKEN"
+
+  deploy:
+    name: Imagem e deploy no AKS
+    runs-on: ubuntu-latest
+    needs: [build-e-testes]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login na Azure via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build e push da imagem
+        run: |
+          az acr login --name "$ACR_NAME"
+          tag="${GITHUB_SHA::7}"
+          docker build -t "$ACR_NAME.azurecr.io/$IMAGE_NAME:$tag" -t "$ACR_NAME.azurecr.io/$IMAGE_NAME:latest" .
+          docker push "$ACR_NAME.azurecr.io/$IMAGE_NAME:$tag"
+          docker push "$ACR_NAME.azurecr.io/$IMAGE_NAME:latest"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+
+      - name: Deploy
+        run: |
+          az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER_NAME" --overwrite-existing
+          kubectl -n "$NAMESPACE" apply -f k8s/deployment.yaml
+          # A tag do commit, e não latest: com latest o Kubernetes não tem como
+          # saber que a imagem mudou e o rollout não acontece.
+          kubectl -n "$NAMESPACE" set image deployment/billing-api "billing-api=$ACR_NAME.azurecr.io/$IMAGE_NAME:$TAG"
+          kubectl -n "$NAMESPACE" rollout status deployment/billing-api --timeout=300s

@@ -1,0 +1,99 @@
+# Infraestrutura local da Fase 4: broker e bancos.
+#
+# Só a infraestrutura. Cada serviço sobe o seu próprio compose apontando para
+# esta rede, para você poder reiniciar um serviço sem derrubar o RabbitMQ e
+# perder o estado das filas no meio de um teste de saga.
+#
+#   docker compose -f fase4/docker-compose.fase4.yml up -d
+#
+# Equivalentes na nuvem:
+#   rabbitmq -> CloudAMQP, plano Little Lemur
+#   mongo    -> MongoDB Atlas M0
+#   sqlserver -> Azure SQL Basic (os-db e identidade-db)
+
+name: postech-fase4
+
+services:
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: postech-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: "${RABBITMQ_USER:-postech}"
+      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_PASSWORD:?Defina RABBITMQ_PASSWORD no .env}"
+    ports:
+      # 5672 é o protocolo; 15672 é o painel, que é onde você mostra a fila
+      # enchendo e a dead letter recebendo a mensagem que falhou.
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_UI_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - fase4
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 40s
+    security_opt:
+      - no-new-privileges:true
+
+  mongo:
+    image: mongo:8
+    container_name: postech-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: "${MONGO_USER:-postech}"
+      MONGO_INITDB_ROOT_PASSWORD: "${MONGO_PASSWORD:?Defina MONGO_PASSWORD no .env}"
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - fase4
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: postech-sqlserver-fase4
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?Defina MSSQL_SA_PASSWORD no .env}"
+      MSSQL_PID: Developer
+    ports:
+      - "${SQL_HOST_PORT:-1433}:1433"
+    volumes:
+      - sqlserver-fase4-data:/var/opt/mssql
+    networks:
+      - fase4
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P $$MSSQL_SA_PASSWORD -No -Q 'SELECT 1' || exit 1",
+        ]
+      interval: 10s
+      timeout: 30s
+      retries: 20
+      start_period: 120s
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  rabbitmq-data:
+  mongo-data:
+  sqlserver-fase4-data:
+
+networks:
+  fase4:
+    name: postech-fase4
+    driver: bridge

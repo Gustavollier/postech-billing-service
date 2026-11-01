@@ -1,0 +1,114 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: billing-api
+  namespace: postechallenge
+  labels:
+    app: billing-api
+    tags.datadoghq.com/service: billing-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: billing-api
+  template:
+    metadata:
+      labels:
+        app: billing-api
+        tags.datadoghq.com/service: billing-service
+      annotations:
+        # O admission controller do Datadog injeta o tracer .NET a partir deste
+        # label, sem tocar no Dockerfile. É a observabilidade da Fase 3
+        # reaproveitada, como o enunciado pede.
+        admission.datadoghq.com/dotnet-lib.version: v3.7.0
+    spec:
+      containers:
+        - name: billing-api
+          image: postechacr13soat.azurecr.io/billing-service:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: MongoConnectionString
+              valueFrom:
+                secretKeyRef:
+                  name: billing-service-secrets
+                  key: mongo-connection-string
+            - name: RabbitMqConnectionString
+              valueFrom:
+                secretKeyRef:
+                  name: billing-service-secrets
+                  key: rabbitmq-connection-string
+            - name: MongoDatabase
+              value: billing-db
+            # Opcional de propósito. Sem o token o serviço sobe com o gateway
+            # indisponível — continua montando orçamento e consumindo a fila, e
+            # só a cobrança não funciona. Marcar como obrigatório faria o pod
+            # ficar em CreateContainerConfigError por causa de uma credencial
+            # de sandbox.
+            - name: MercadoPago__AccessToken
+              valueFrom:
+                secretKeyRef:
+                  name: billing-service-secrets
+                  key: mercadopago-access-token
+                  optional: true
+          resources:
+            # 150m por réplica, como na Fase 3: a quota regional é de 4 vCPU e
+            # agora são quatro serviços dividindo o mesmo teto.
+            requests:
+              cpu: 150m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            # Separado do liveness: o pod sobe antes de o consumidor conectar no
+            # broker, e mandar tráfego nesse intervalo dá erro à toa.
+            httpGet:
+              path: /health/ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: billing-api
+  namespace: postechallenge
+spec:
+  type: ClusterIP
+  selector:
+    app: billing-api
+  ports:
+    - port: 80
+      targetPort: 8080
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: billing-api
+  namespace: postechallenge
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: billing-api
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 120
