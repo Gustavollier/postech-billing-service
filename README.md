@@ -6,6 +6,9 @@ Microsserviço de **Orçamento e Pagamento** do Tech Challenge Fase 4 (FIAP 13SO
 
 Dono do orçamento, da aprovação do cliente e da cobrança no adquirente.
 
+
+> Visão de conjunto dos quatro serviços, com o diagrama da arquitetura e da saga: [`docs/arquitetura.md`](docs/arquitetura.md).
+
 ## O que este serviço faz
 
 | Responsabilidade | Detalhe |
