@@ -1,16 +1,13 @@
 using System.Net;
 using System.Net.Http.Json;
-using Microsoft.AspNetCore.Mvc.Testing;
 using MongoDB.Driver;
 using PosTech.Billing;
-using PosTech.Mensageria;
 using Testcontainers.MongoDb;
-using Testcontainers.RabbitMq;
 
 namespace PosTech.Billing.Testes;
 
 /// <summary>
-/// Sobe a API de verdade, com Mongo e RabbitMQ de verdade.
+/// A API sobe, e sobe inteira.
 ///
 /// Este arquivo existe por causa de um defeito real: o serviço compilava, 35
 /// testes passavam, e ele **não subia** — <c>IRegistroDeIdempotencia</c> nunca
@@ -21,30 +18,12 @@ namespace PosTech.Billing.Testes;
 /// A lição que fica no repositório: montar o grafo de dependências é parte do
 /// comportamento do serviço, e tem que ser exercitada como tal.
 /// </summary>
-public sealed class SubidaDoServicoTests : IAsyncLifetime
+[Collection("billing")]
+public class SubidaDoServicoTests
 {
-    private readonly MongoDbContainer _mongo = new MongoDbBuilder("mongo:8").Build();
-    private readonly RabbitMqContainer _rabbit = new RabbitMqBuilder("rabbitmq:4").Build();
+    private readonly AmbienteDoBilling _ambiente;
 
-    private WebApplicationFactory<Program> _fabrica = null!;
-
-    public async Task InitializeAsync()
-    {
-        await Task.WhenAll(_mongo.StartAsync(), _rabbit.StartAsync());
-
-        _fabrica = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
-        {
-            builder.UseSetting("MongoConnectionString", _mongo.GetConnectionString());
-            builder.UseSetting("RabbitMqConnectionString", _rabbit.GetConnectionString());
-            builder.UseSetting("MongoDatabase", "billing-db");
-        });
-    }
-
-    public async Task DisposeAsync()
-    {
-        await _fabrica.DisposeAsync();
-        await Task.WhenAll(_mongo.DisposeAsync().AsTask(), _rabbit.DisposeAsync().AsTask());
-    }
+    public SubidaDoServicoTests(AmbienteDoBilling ambiente) => _ambiente = ambiente;
 
     [Fact]
     public async Task O_servico_sobe_com_todas_as_dependencias_resolvidas()
@@ -52,21 +31,18 @@ public sealed class SubidaDoServicoTests : IAsyncLifetime
         // O GET é quase incidental: o que se prova aqui é que o host iniciou,
         // o que inclui construir ConsumidorDoBilling, PublicadorDoOutbox e
         // CriadorDeIndices com tudo o que eles pedem no construtor.
-        var cliente = _fabrica.CreateClient();
-
-        var resposta = await cliente.GetAsync("/health");
+        var resposta = await _ambiente.Cliente().GetAsync("/health");
 
         Assert.Equal(HttpStatusCode.OK, resposta.StatusCode);
     }
 
     [Fact]
-    public async Task Sem_token_do_adquirente_o_servico_sobe_com_o_gateway_indisponivel()
+    public async Task O_readiness_responde_separado_do_liveness()
     {
-        // Decisão de desenho do Program.cs: credencial de sandbox que ainda não
-        // chegou não pode deixar o Billing inteiro fora do ar.
-        var cliente = _fabrica.CreateClient();
-
-        var resposta = await cliente.GetAsync("/health/ready");
+        // São sondas diferentes no manifesto por um motivo: o pod sobe antes de
+        // o consumidor conectar no broker, e mandar tráfego nesse intervalo dá
+        // erro à toa.
+        var resposta = await _ambiente.Cliente().GetAsync("/health/ready");
 
         Assert.Equal(HttpStatusCode.OK, resposta.StatusCode);
     }
@@ -76,9 +52,15 @@ public sealed class SubidaDoServicoTests : IAsyncLifetime
     {
         // A rota passa por Mongo de verdade e pela serialização de verdade. É o
         // tipo de rota onde um mapeamento errado só aparece quando se chama.
-        var cliente = _fabrica.CreateClient();
+        var resposta = await _ambiente.Cliente().GetAsync("/api/v1/orcamentos/os/4242");
 
-        var resposta = await cliente.GetAsync("/api/v1/orcamentos/os/4242");
+        Assert.Equal(HttpStatusCode.NotFound, resposta.StatusCode);
+    }
+
+    [Fact]
+    public async Task Aprovar_uma_ordem_que_nao_tem_orcamento_devolve_404()
+    {
+        var resposta = await _ambiente.Cliente().PostAsync("/api/v1/orcamentos/os/4243/aprovar", null);
 
         Assert.Equal(HttpStatusCode.NotFound, resposta.StatusCode);
     }
@@ -88,10 +70,17 @@ public sealed class SubidaDoServicoTests : IAsyncLifetime
     {
         // O Mercado Pago reenvia enquanto não receber 2xx. Devolver erro para
         // uma notificação de outro ambiente viraria tempestade de reenvio.
-        var cliente = _fabrica.CreateClient();
+        var resposta = await _ambiente.Cliente().PostAsJsonAsync(
+            "/api/v1/pagamentos/webhook", new { type = "payment", data = new { id = "de-outro-ambiente" } });
 
-        var resposta = await cliente.PostAsJsonAsync(
-            "/api/v1/pagamentos/webhook", new { type = "payment", data = new { id = "nao-existe-aqui" } });
+        Assert.Equal(HttpStatusCode.OK, resposta.StatusCode);
+    }
+
+    [Fact]
+    public async Task O_webhook_sem_id_no_corpo_tambem_responde_200()
+    {
+        var resposta = await _ambiente.Cliente().PostAsJsonAsync(
+            "/api/v1/pagamentos/webhook", new { type = "payment" });
 
         Assert.Equal(HttpStatusCode.OK, resposta.StatusCode);
     }
@@ -102,15 +91,23 @@ public sealed class SubidaDoServicoTests : IAsyncLifetime
         // O CriadorDeIndices roda como IHostedService. Se ele falhar, o serviço
         // sobe assim mesmo (de propósito) — então o índice único, que é o que
         // impede dois orçamentos para a mesma ordem, precisa ser conferido.
-        _ = _fabrica.CreateClient();
+        var indices = await (await _ambiente.Banco
+            .GetCollection<Orcamento>("orcamentos").Indexes.ListAsync()).ToListAsync();
 
-        var banco = new MongoClient(_mongo.GetConnectionString()).GetDatabase("billing-db");
-
-        var indices = await (await banco.GetCollection<Orcamento>("orcamentos").Indexes.ListAsync()).ToListAsync();
         var nomes = indices.Select(i => i["name"].AsString).ToList();
 
         Assert.Contains("ux_idOrdem", nomes);
         Assert.Contains("ix_referenciaExterna", nomes);
+        Assert.Contains("ix_eventosPendentes", nomes);
+    }
+
+    [Fact]
+    public async Task O_TTL_da_idempotencia_tambem_e_criado_na_partida()
+    {
+        var indices = await (await _ambiente.Banco
+            .GetCollection<EventoProcessado>("eventosProcessados").Indexes.ListAsync()).ToListAsync();
+
+        Assert.Contains(indices, i => i["name"].AsString == "ttl_processadoEm");
     }
 }
 
@@ -119,7 +116,7 @@ public sealed class SubidaDoServicoTests : IAsyncLifetime
 /// </summary>
 public sealed class IdempotenciaMongoTests : IAsyncLifetime
 {
-    private readonly MongoDbContainer _mongo = new MongoDbBuilder("mongo:8").Build();
+    private readonly MongoDbContainer _mongo = InfraDeTeste.Mongo();
 
     private IdempotenciaMongo _idempotencia = null!;
     private IMongoDatabase _banco = null!;

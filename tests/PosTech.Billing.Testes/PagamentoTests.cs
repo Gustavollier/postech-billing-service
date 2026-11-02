@@ -49,7 +49,15 @@ public class PagamentoDoOrcamentoTests
 
         Assert.Equal("mp-1", orcamento.ReferenciaExterna);
         Assert.Equal("https://pagar", orcamento.UrlDePagamento);
-        Assert.Equal(EStatusDoPagamento.SemCobranca, orcamento.StatusDoPagamento);
+
+        // Aguardando, e não SemCobranca: há cobrança aberta e URL para pagar.
+        // Esta asserção já afirmou SemCobranca, o que era o defeito escrito
+        // como se fosse regra — o orçamento ficava indistinguível de um que
+        // nunca foi cobrado.
+        Assert.Equal(EStatusDoPagamento.Aguardando, orcamento.StatusDoPagamento);
+
+        // O que de fato prova que a oficina não foi liberada: nenhum evento
+        // saiu. É daqui que o Execução receberia a ordem para trabalhar.
         Assert.Empty(orcamento.EventosPendentes);
     }
 

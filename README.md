@@ -117,18 +117,32 @@ há script de schema a rodar à mão.
 dotnet test
 ```
 
-**46 testes.** Os de integração sobem MongoDB e RabbitMQ de verdade via
-Testcontainers — precisa de Docker. Dublê não prova atomicidade de escrita nem
-índice único, que é justamente o que mais importa aqui: o índice por ordem é o
-que impede duas entregas do mesmo `DiagnosticoConcluido` virarem dois
-orçamentos.
+**73 testes, 90% de cobertura de linha.** Os de integração sobem MongoDB e
+RabbitMQ de verdade via Testcontainers — precisa de Docker. Dublê não prova
+atomicidade de escrita nem índice único, que é justamente o que mais importa
+aqui: o índice por ordem é o que impede duas entregas do mesmo
+`DiagnosticoConcluido` virarem dois orçamentos.
 
-Entre eles há um que **sobe a API inteira**. Ele existe por causa de um defeito
-real: o serviço compilava, 35 testes passavam, e ele não subia — faltava
-registrar `IRegistroDeIdempotencia` no contêiner de injeção, e o consumidor
-morria na partida. Nenhum teste de unidade pega isso, porque nenhum deles monta
-o contêiner. Montar o grafo de dependências é comportamento do serviço e passou
-a ser exercitado como tal.
+O grupo mais importante é o de `FluxoDoBillingTests`: o serviço **inteiro no
+ar**, com o evento entrando pelo RabbitMQ, o orçamento nascendo no Mongo, o
+cliente respondendo por HTTP, e o evento de saída atravessando o broker até a
+fila do orquestrador. O único dublê é o adquirente, porque o Mercado Pago não é
+parte do nosso sistema.
+
+Isso achou três coisas que teste de unidade não acharia:
+
+1. **O serviço não subia.** Compilava, 35 testes passavam, e o host morria na
+   partida — faltava registrar `IRegistroDeIdempotencia` no contêiner de
+   injeção. Montar o grafo de dependências é comportamento do serviço e passou a
+   ser exercitado como tal.
+2. **`RegistrarCobranca` não marcava o pagamento como `Aguardando`.** O
+   orçamento ficava com referência do adquirente e URL de pagamento, mas
+   reportando `SemCobranca` — indistinguível de quem nunca foi cobrado, que é
+   exatamente a diferença que o cliente precisa ver na tela. Havia até um teste
+   afirmando `SemCobranca`: o defeito estava escrito como se fosse regra.
+3. **O `mongo:8` não sobe no runner do GitHub**, que roda kernel 6.19
+   ([SERVER-121912](https://jira.mongodb.org/browse/SERVER-121912)). Passava
+   local, falhava no CI. O contorno está em `InfraDeTeste`, num lugar só.
 
 O que os testes de regra garantem, entre outras coisas:
 

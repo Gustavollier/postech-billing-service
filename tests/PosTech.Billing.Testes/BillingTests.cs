@@ -117,7 +117,7 @@ public class MontadorDeOrcamentoTests
 /// </summary>
 public sealed class BillingMongoTests : IAsyncLifetime
 {
-    private readonly MongoDbContainer _mongo = new MongoDbBuilder("mongo:8").Build();
+    private readonly MongoDbContainer _mongo = InfraDeTeste.Mongo();
 
     private IMongoDatabase _banco = null!;
     private OrcamentoRepositorio _orcamentos = null!;

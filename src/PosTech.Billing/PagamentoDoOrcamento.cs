@@ -31,6 +31,17 @@ public static class PagamentoDoOrcamento
         orcamento.ReferenciaExterna = cobranca.ReferenciaExterna;
         orcamento.UrlDePagamento = cobranca.UrlDePagamento;
         orcamento.CobrancaCriadaEm = agora;
+
+        // "Cobrança criada" é um estado próprio, e precisa aparecer como tal:
+        // sem isto o orçamento ficava reportando SemCobranca mesmo tendo
+        // referência do adquirente e URL de pagamento, indistinguível de quem
+        // nunca foi cobrado — e é justamente essa a diferença que o cliente
+        // precisa ver na tela ("vá pagar" ou "aguarde").
+        //
+        // Não rebaixa o que já foi resolvido: confirmado e estornado são
+        // definitivos, e uma segunda passagem por aqui não pode desfazê-los.
+        if (orcamento.StatusDoPagamento is not (EStatusDoPagamento.Confirmado or EStatusDoPagamento.Estornado))
+            orcamento.StatusDoPagamento = EStatusDoPagamento.Aguardando;
     }
 
     /// <summary>
