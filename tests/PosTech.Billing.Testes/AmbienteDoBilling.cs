@@ -140,8 +140,14 @@ public sealed class GatewayFalso : IGatewayDePagamento
         return Task.FromResult(Resposta with { ReferenciaExterna = referencia });
     }
 
-    public Task<Cobranca> ConsultarAsync(string referenciaExterna, CancellationToken cancellationToken = default) =>
-        Task.FromResult(Resposta with { ReferenciaExterna = referenciaExterna });
+    /// <summary>As referências que alguém pediu para consultar no adquirente.</summary>
+    public System.Collections.Concurrent.ConcurrentBag<string> Consultadas { get; } = [];
+
+    public Task<Cobranca> ConsultarAsync(string referenciaExterna, CancellationToken cancellationToken = default)
+    {
+        Consultadas.Add(referenciaExterna);
+        return Task.FromResult(Resposta with { ReferenciaExterna = referenciaExterna });
+    }
 
     public void Reiniciar()
     {

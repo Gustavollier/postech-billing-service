@@ -103,6 +103,12 @@ public sealed class GatewayMercadoPago : IGatewayDePagamento
 
     public async Task<Cobranca> ConsultarAsync(string referenciaExterna, CancellationToken cancellationToken = default)
     {
+        // O id vira caminho de URL numa chamada que leva o nosso token. Id de
+        // pagamento do Mercado Pago é numérico; qualquer outra coisa — "../",
+        // "?", "/" — mudaria o endpoint chamado com a nossa credencial.
+        if (!ReferenciaValida(referenciaExterna))
+            throw new ArgumentException($"Referência de pagamento inválida: '{referenciaExterna}'.", nameof(referenciaExterna));
+
         using var requisicao = new HttpRequestMessage(HttpMethod.Get, $"/v1/payments/{referenciaExterna}");
         requisicao.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
 
@@ -134,6 +140,10 @@ public sealed class GatewayMercadoPago : IGatewayDePagamento
     /// nova do Mercado Pago viraria um bug silencioso em cada ponto que a
     /// comparasse.
     /// </summary>
+    /// <summary>Só dígitos, até 20: o formato do id de pagamento do Mercado Pago.</summary>
+    public static bool ReferenciaValida(string? referencia) =>
+        referencia is { Length: > 0 and <= 20 } && referencia.All(char.IsAsciiDigit);
+
     internal static Cobranca Traduzir(RespostaDePagamento corpo)
     {
         var resultado = corpo.Status switch

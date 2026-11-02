@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using MongoDB.Driver;
 using PosTech.Billing;
 using PosTech.Billing.Api.Aplicacao;
+using PosTech.Billing.Api.Infra;
 using PosTech.Contratos;
 using PosTech.Mensageria;
 
@@ -89,25 +90,6 @@ app.MapHealthChecks("/health");
 app.MapGet("/health/ready", () => Results.Ok(new { status = "pronto" }));
 
 app.Run();
-
-/// <summary>
-/// Gateway de mentira para quando não há token configurado.
-///
-/// Recusa com uma mensagem que diz o que falta, em vez de estourar
-/// NullReference no meio da aprovação. O serviço continua montando orçamento e
-/// respondendo à fila normalmente — só a cobrança não funciona.
-/// </summary>
-internal sealed class GatewayIndisponivel : IGatewayDePagamento
-{
-    private const string Motivo =
-        "Mercado Pago não configurado: defina MercadoPago__AccessToken.";
-
-    public Task<Cobranca> CriarCobrancaAsync(Orcamento orcamento, string correlationId, CancellationToken cancellationToken = default) =>
-        Task.FromResult(new Cobranca(EResultadoDaCobranca.Recusada, string.Empty, Motivo, null));
-
-    public Task<Cobranca> ConsultarAsync(string referenciaExterna, CancellationToken cancellationToken = default) =>
-        Task.FromResult(new Cobranca(EResultadoDaCobranca.Recusada, referenciaExterna, Motivo, null));
-}
 
 /// <summary>Exposto para os testes de integração subirem a API em memória.</summary>
 public partial class Program;

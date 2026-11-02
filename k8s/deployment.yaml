@@ -22,6 +22,10 @@ spec:
         # reaproveitada, como o enunciado pede.
         admission.datadoghq.com/dotnet-lib.version: v3.7.0
     spec:
+      # A API não fala com o servidor do Kubernetes, então não precisa do
+      # token da conta de serviço montado no pod. Montado, ele é credencial
+      # de graça para quem conseguir executar código no contêiner.
+      automountServiceAccountToken: false
       containers:
         - name: billing-api
           image: postechacr13soat.azurecr.io/billing-service:latest

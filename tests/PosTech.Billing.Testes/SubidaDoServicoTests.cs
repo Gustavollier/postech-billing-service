@@ -66,6 +66,21 @@ public class SubidaDoServicoTests
     }
 
     [Fact]
+    public async Task O_webhook_so_consulta_o_adquirente_para_cobranca_que_e_nossa()
+    {
+        // A rota é pública. Se o id que chega fosse direto para a consulta,
+        // qualquer um faria o serviço chamar o Mercado Pago, com o nosso
+        // token, no caminho que quisesse — "../users/me", por exemplo.
+        var maliciosa = "../users/me";
+
+        var resposta = await _ambiente.Cliente().PostAsJsonAsync(
+            "/api/v1/pagamentos/webhook", new { type = "payment", data = new { id = maliciosa } });
+
+        Assert.Equal(HttpStatusCode.OK, resposta.StatusCode);
+        Assert.DoesNotContain(maliciosa, _ambiente.Gateway.Consultadas);
+    }
+
+    [Fact]
     public async Task O_webhook_responde_200_para_notificacao_que_nao_e_nossa()
     {
         // O Mercado Pago reenvia enquanto não receber 2xx. Devolver erro para

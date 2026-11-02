@@ -289,6 +289,33 @@ public class GatewayMercadoPagoTests
         Assert.Equal(EResultadoDaCobranca.Pendente, cobranca.Resultado);
     }
 
+    [Theory]
+    [InlineData("../users/me")]
+    [InlineData("123/../../v1/customers")]
+    [InlineData("123?access_token=x")]
+    [InlineData("")]
+    [InlineData("123456789012345678901")]
+    public async Task Referencia_fora_do_formato_nao_vira_chamada_ao_adquirente(string referencia)
+    {
+        // A chamada leva o nosso token. Um id com "../" faria o gateway
+        // consultar outro endpoint do Mercado Pago com a nossa credencial — a
+        // vulnerabilidade que o SonarCloud apontou (S7044).
+        var http = ClienteQueResponde(HttpStatusCode.OK, """{"id": 1, "status": "approved"}""");
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => new GatewayMercadoPago(http, "token-teste").ConsultarAsync(referencia));
+    }
+
+    [Theory]
+    [InlineData("1", true)]
+    [InlineData("1234567890", true)]
+    [InlineData("12a", false)]
+    [InlineData(null, false)]
+    public void Referencia_valida_e_so_digitos(string? referencia, bool valida)
+    {
+        Assert.Equal(valida, GatewayMercadoPago.ReferenciaValida(referencia));
+    }
+
     [Fact]
     public async Task Pix_devolve_o_link_de_pagamento()
     {

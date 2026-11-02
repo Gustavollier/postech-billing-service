@@ -51,6 +51,20 @@ public sealed class PagamentosController : ControllerBase
             return Ok(new { recebido = true });
         }
 
+        // Primeiro: a referência é de uma cobrança que nós criamos? A rota é
+        // pública, e consultar o adquirente com um id qualquer vindo de fora
+        // seria usar a nossa credencial a pedido de quem quer que seja. Só ids
+        // que já estão gravados aqui seguem para a consulta.
+        var orcamento = await _orcamentos.ObterPorReferenciaExternaAsync(idExterno, cancellationToken);
+
+        if (orcamento is null)
+        {
+            // Pode ser notificação de outro ambiente usando o mesmo webhook, ou
+            // a notificação chegando antes de a cobrança terminar de gravar.
+            _log.LogWarning("Pagamento {IdExterno} não corresponde a nenhum orçamento daqui.", idExterno);
+            return Ok(new { recebido = true });
+        }
+
         var correlationId = CorrelationId();
 
         Cobranca cobranca;
@@ -65,14 +79,11 @@ public sealed class PagamentosController : ControllerBase
             _log.LogError(excecao, "Falha ao consultar o pagamento {IdExterno}.", idExterno);
             return StatusCode(StatusCodes.Status502BadGateway, new { erro = "Não foi possível consultar o pagamento." });
         }
-
-        var orcamento = await _orcamentos.ObterPorReferenciaExternaAsync(idExterno, cancellationToken);
-
-        if (orcamento is null)
+        catch (ArgumentException excecao)
         {
-            // Pode ser notificação de outro ambiente usando o mesmo webhook, ou
-            // a notificação chegando antes de a cobrança terminar de gravar.
-            _log.LogWarning("Pagamento {IdExterno} não corresponde a nenhum orçamento daqui.", idExterno);
+            // Referência fora do formato do adquirente. Não há o que consultar
+            // nem o que reenviar: responder erro só geraria reenvio.
+            _log.LogWarning(excecao, "Referência de pagamento inválida: {IdExterno}.", idExterno);
             return Ok(new { recebido = true });
         }
 

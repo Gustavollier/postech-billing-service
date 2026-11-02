@@ -58,7 +58,7 @@ jobs:
             --logger "trx;LogFileName=testes.trx"
 
       - name: Relatório de cobertura
-        uses: danielpalme/ReportGenerator-GitHub-Action@5.4.1
+        uses: danielpalme/ReportGenerator-GitHub-Action@810356ce07a94200154301fb73d878e327b2dd58 # 5.4.1
         with:
           reports: ./cobertura/**/coverage.cobertura.xml
           targetdir: ./cobertura/relatorio
@@ -122,8 +122,18 @@ jobs:
             /k:"postech4_postech-billing-service" \
             /o:"postech4" \
             /d:sonar.token="$SONAR_TOKEN" \
-            /d:sonar.host.url="https://sonarcloud.io"
+            /d:sonar.host.url="https://sonarcloud.io" \
+            /d:sonar.cs.opencover.reportsPaths="cobertura-sonar/**/coverage.opencover.xml" \
+            /d:sonar.coverage.exclusions="tests/**"
           dotnet build -c Release
+          # Os testes rodam de novo aqui, dentro da análise, para o Sonar
+          # receber a cobertura. Sem isto ele mostrava 0% e o quality gate
+          # reprovava por "cobertura de código novo", com 94% medidos no job
+          # ao lado. Formato opencover, que é o que o scanner do .NET lê.
+          dotnet test -c Release --no-build \
+            --collect:"XPlat Code Coverage" \
+            --results-directory ./cobertura-sonar \
+            -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
           dotnet sonarscanner end /d:sonar.token="$SONAR_TOKEN"
 
   deploy:
@@ -163,7 +173,7 @@ jobs:
 
       - name: Login na Azure via OIDC
         if: env.AZURE_CLIENT_ID != ''
-        uses: azure/login@v2
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}

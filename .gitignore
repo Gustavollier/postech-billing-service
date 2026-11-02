@@ -4,3 +4,6 @@ obj/
 .vs/
 .idea/
 appsettings.Development.json
+
+# Cobertura gerada para o SonarCloud
+cobertura-sonar/
