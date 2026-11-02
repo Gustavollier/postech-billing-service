@@ -169,8 +169,37 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build e push da imagem
+      # Login passou, mas o ambiente pode não existir: entre uma gravação e
+      # outra o cluster e o registro são destruídos para não queimar crédito.
+      # Nesse caso o deploy se pula com aviso, como quando faltam os segredos.
+      # Só "não existe" pula; qualquer outro erro (permissão, rede) reprova,
+      # porque esse é o tipo de falha que precisa de alguém olhando.
+      - name: Conferir se o ambiente existe
+        id: ambiente
         if: env.AZURE_CLIENT_ID != ''
+        run: |
+          faltando=""
+          for recurso in "acr show -n $ACR_NAME -g $RESOURCE_GROUP" "aks show -n $CLUSTER_NAME -g $RESOURCE_GROUP"; do
+            if ! saida=$(az $recurso --query id -o tsv 2>&1); then
+              if echo "$saida" | grep -qiE "ResourceNotFound|ResourceGroupNotFound|was not found|could not be found"; then
+                faltando="$faltando ${recurso%% *}"
+              else
+                echo "$saida"
+                exit 1
+              fi
+            fi
+          done
+          if [ -n "$faltando" ]; then
+            echo "existe=false" >> "$GITHUB_OUTPUT"
+            echo "### Deploy pulado" >> "$GITHUB_STEP_SUMMARY"
+            echo "O login na Azure funcionou, mas não existe:$faltando. Aplique o Terraform do postech-infra-k8s." >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::Deploy pulado: ambiente não provisionado ($faltando)."
+          else
+            echo "existe=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build e push da imagem
+        if: env.AZURE_CLIENT_ID != '' && steps.ambiente.outputs.existe == 'true'
         run: |
           az acr login --name "$ACR_NAME"
           tag="${GITHUB_SHA::7}"
@@ -180,7 +209,7 @@ jobs:
           echo "TAG=$tag" >> "$GITHUB_ENV"
 
       - name: Deploy
-        if: env.AZURE_CLIENT_ID != ''
+        if: env.AZURE_CLIENT_ID != '' && steps.ambiente.outputs.existe == 'true'
         run: |
           az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER_NAME" --overwrite-existing
           kubectl -n "$NAMESPACE" apply -f k8s/deployment.yaml
