@@ -109,7 +109,9 @@ public sealed class GatewayMercadoPago : IGatewayDePagamento
         if (!ReferenciaValida(referenciaExterna))
             throw new ArgumentException($"Referência de pagamento inválida: '{referenciaExterna}'.", nameof(referenciaExterna));
 
-        using var requisicao = new HttpRequestMessage(HttpMethod.Get, $"/v1/payments/{referenciaExterna}");
+        // O escape é redundante depois da validação acima, mas é o sanitizador
+        // que a análise de fluxo do SonarCloud reconhece, e não custa nada.
+        using var requisicao = new HttpRequestMessage(HttpMethod.Get, $"/v1/payments/{Uri.EscapeDataString(referenciaExterna)}");
         requisicao.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
 
         using var resposta = await _http.SendAsync(requisicao, cancellationToken).ConfigureAwait(false);
