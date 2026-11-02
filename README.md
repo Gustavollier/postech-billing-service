@@ -1,5 +1,7 @@
 # postech-billing-service
 
+[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=postech4_postech-billing-service&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=postech4_postech-billing-service) [![Cobertura](https://sonarcloud.io/api/project_badges/measure?project=postech4_postech-billing-service&metric=coverage)](https://sonarcloud.io/summary/new_code?id=postech4_postech-billing-service) [![Bugs](https://sonarcloud.io/api/project_badges/measure?project=postech4_postech-billing-service&metric=bugs)](https://sonarcloud.io/summary/new_code?id=postech4_postech-billing-service) [![Vulnerabilidades](https://sonarcloud.io/api/project_badges/measure?project=postech4_postech-billing-service&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=postech4_postech-billing-service) [![CI/CD](https://github.com/Gustavollier/postech-billing-service/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/Gustavollier/postech-billing-service/actions/workflows/ci-cd.yml)
+
 Microsserviço de **Orçamento e Pagamento** do Tech Challenge Fase 4 (FIAP 13SOAT).
 
 Dono do orçamento, da aprovação do cliente e da cobrança no adquirente.
