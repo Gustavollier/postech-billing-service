@@ -137,6 +137,8 @@ A regra que organiza todas: **compensar só o que de fato aconteceu**. O fluxo
 completo, com as compensações, está especificado em BDD em
 [`tests/PosTech.Os.Testes/Bdd`](https://github.com/Gustavollier/postech-os-service/tree/main/tests/PosTech.Os.Testes/Bdd).
 
+Para percorrer esse fluxo de verdade, pelo gateway: [coleção do Postman](https://github.com/Gustavollier/postech-os-service/blob/main/docs/postman/PosTech-Fase4.postman_collection.json).
+
 ## Garantias de entrega
 
 | Problema | Solução |
