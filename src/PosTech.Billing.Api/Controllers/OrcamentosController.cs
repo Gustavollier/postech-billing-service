@@ -122,6 +122,10 @@ public sealed class OrcamentosController : ControllerBase
         status = o.Status.ToString(),
         statusDoPagamento = o.StatusDoPagamento.ToString(),
         urlDePagamento = o.UrlDePagamento,
+
+        // O id da cobrança no Mercado Pago. É o que a notificação do webhook
+        // traz, e é por ele que se acha a cobrança no painel do adquirente.
+        referenciaExterna = o.ReferenciaExterna,
         motivoDaRecusa = o.MotivoDaRecusa ?? o.MotivoDaRecusaDoPagamento,
         itens = o.Itens.Select(i => new
         {

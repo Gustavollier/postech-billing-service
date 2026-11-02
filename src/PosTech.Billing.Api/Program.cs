@@ -49,8 +49,11 @@ builder.Services.AddSingleton<IRegistroDeIdempotencia>(sp =>
 // gateway que recusa toda cobrança e diz o porquê — melhor que estourar na
 // partida e deixar o resto do Billing fora do ar por causa de uma credencial
 // que ainda não chegou.
-var tokenMercadoPago = builder.Configuration["MercadoPago__AccessToken"]
-    ?? builder.Configuration["MercadoPago:AccessToken"];
+// "MercadoPago:AccessToken" e não "MercadoPago__AccessToken": o .NET troca o
+// "__" da variável de ambiente por ":" ao montar a configuração. Lida com
+// "__", a chave nunca existe — foi o que fazia a BaseUrl abaixo ser ignorada
+// em silêncio, sempre caindo no Mercado Pago real.
+var tokenMercadoPago = builder.Configuration["MercadoPago:AccessToken"];
 
 if (string.IsNullOrWhiteSpace(tokenMercadoPago))
 {
@@ -60,7 +63,7 @@ else
 {
     builder.Services.AddHttpClient(GatewayMercadoPago.NomeDoHttpClient, http =>
     {
-        http.BaseAddress = new Uri(builder.Configuration["MercadoPago__BaseUrl"] ?? "https://api.mercadopago.com");
+        http.BaseAddress = new Uri(builder.Configuration["MercadoPago:BaseUrl"] ?? "https://api.mercadopago.com");
         http.Timeout = TimeSpan.FromSeconds(20);
     });
 
