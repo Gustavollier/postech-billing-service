@@ -95,6 +95,16 @@ jobs:
     # não tem acesso à organização do Sonar.
     if: ${{ !github.event.pull_request.head.repo.fork }}
 
+    # O segredo é declarado no JOB, e não no step.
+    #
+    # Declarado no step, o `if: env.SONAR_TOKEN != ''` daquele mesmo step nunca
+    # enxerga o valor: o GitHub resolve a condição antes de montar o ambiente do
+    # step, e o contexto `env` ali só alcança o nível do job e do workflow. O
+    # resultado era um job que se pulava sozinho para sempre, com ou sem token —
+    # análise de qualidade que nunca rodava e nunca reclamava.
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -106,8 +116,6 @@ jobs:
 
       - name: Análise
         if: env.SONAR_TOKEN != ''
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
           dotnet tool install --global dotnet-sonarscanner
           dotnet sonarscanner begin \
@@ -128,10 +136,33 @@ jobs:
       contents: read
       id-token: write
 
+    # Sem ambiente na Azure configurado, o deploy se pula em vez de reprovar.
+    #
+    # Não é complacência: build, testes e gate de cobertura continuam valendo, e
+    # são eles que dizem se o código presta. O que não serve é a pipeline ficar
+    # vermelha por um ambiente que sabidamente não existe — vermelho permanente
+    # ensina todo mundo a ignorar vermelho, e aí o dia em que a falha for de
+    # verdade ninguém olha.
+    #
+    # O segredo vai no nível do job porque o contexto `secrets` não é visível no
+    # `if` de um job, e o `env` de um step não é visível no `if` daquele mesmo
+    # step. O nível do job é o único lugar onde as duas coisas se encontram.
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+
     steps:
       - uses: actions/checkout@v4
+        if: env.AZURE_CLIENT_ID != ''
+
+      - name: Avisar que o deploy foi pulado
+        if: env.AZURE_CLIENT_ID == ''
+        run: |
+          echo "### Deploy pulado" >> "$GITHUB_STEP_SUMMARY"
+          echo "AZURE_CLIENT_ID não está configurado neste repositório, então não há ambiente para publicar." >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::Deploy pulado: configure os segredos AZURE_* quando o ambiente existir."
 
       - name: Login na Azure via OIDC
+        if: env.AZURE_CLIENT_ID != ''
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -139,6 +170,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Build e push da imagem
+        if: env.AZURE_CLIENT_ID != ''
         run: |
           az acr login --name "$ACR_NAME"
           tag="${GITHUB_SHA::7}"
@@ -148,6 +180,7 @@ jobs:
           echo "TAG=$tag" >> "$GITHUB_ENV"
 
       - name: Deploy
+        if: env.AZURE_CLIENT_ID != ''
         run: |
           az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER_NAME" --overwrite-existing
           kubectl -n "$NAMESPACE" apply -f k8s/deployment.yaml
