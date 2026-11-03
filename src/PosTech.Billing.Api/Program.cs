@@ -69,7 +69,10 @@ else
 
     builder.Services.AddSingleton<IGatewayDePagamento>(sp => new GatewayMercadoPago(
         sp.GetRequiredService<IHttpClientFactory>().CreateClient(GatewayMercadoPago.NomeDoHttpClient),
-        tokenMercadoPago));
+        tokenMercadoPago,
+        // Só sandbox: "APRO" faz o Mercado Pago aprovar o Pix de teste
+        // sozinho. Em produção, não configure.
+        builder.Configuration["MercadoPago:NomeDoPagadorDeTeste"]));
 }
 
 builder.Services.AddSingleton(_ => new ConexaoRabbitMq(rabbitConnectionString, PagamentoDoOrcamento.Origem));

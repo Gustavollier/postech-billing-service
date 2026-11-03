@@ -242,76 +242,84 @@ public class GatewayMercadoPagoTests
         return orcamento;
     }
 
+    private const string Pedido = "ORD01JP84C939T20S0P1DN382FQ6K";
+
+    private static string PedidoJson(string status, string detalhe = "", string id = Pedido, string ticket = "") => $$$"""
+        {"id": "{{{id}}}", "status": "{{{status}}}", "status_detail": "{{{detalhe}}}",
+         "transactions": {"payments": [{"id": "PAY01", "status": "{{{status}}}",
+           "payment_method": {"id": "pix", "type": "bank_transfer", "ticket_url": "{{{ticket}}}", "qr_code": "000201"}}]}}
+        """;
+
     [Fact]
-    public async Task Cobranca_aprovada_vira_resultado_aprovado_com_a_referencia()
+    public async Task Pedido_processado_vira_resultado_aprovado_com_a_referencia()
     {
-        var http = ClienteQueResponde(HttpStatusCode.Created, """
-            {"id": 123456789, "status": "approved", "status_detail": "accredited"}
-            """);
+        var http = ClienteQueResponde(HttpStatusCode.Created, PedidoJson("processed", "accredited"));
 
         var cobranca = await new GatewayMercadoPago(http, "token-teste")
             .CriarCobrancaAsync(UmOrcamento(), "corr-1");
 
         Assert.Equal(EResultadoDaCobranca.Aprovada, cobranca.Resultado);
-        Assert.Equal("123456789", cobranca.ReferenciaExterna);
+        Assert.Equal(Pedido, cobranca.ReferenciaExterna);
         Assert.Null(cobranca.MotivoDaRecusa);
     }
 
-    [Fact]
-    public async Task Cobranca_recusada_traz_o_motivo_do_adquirente()
+    [Theory]
+    [InlineData("failed", "rejected_by_issuer")]
+    [InlineData("canceled", "canceled")]
+    public async Task Pedido_que_falhou_ou_foi_cancelado_traz_o_motivo(string status, string detalhe)
     {
-        var http = ClienteQueResponde(HttpStatusCode.Created, """
-            {"id": 987, "status": "rejected", "status_detail": "cc_rejected_insufficient_amount"}
-            """);
+        var http = ClienteQueResponde(HttpStatusCode.Created, PedidoJson(status, detalhe));
 
         var cobranca = await new GatewayMercadoPago(http, "token-teste")
             .CriarCobrancaAsync(UmOrcamento(), "corr-1");
 
         Assert.Equal(EResultadoDaCobranca.Recusada, cobranca.Resultado);
-        Assert.Equal("cc_rejected_insufficient_amount", cobranca.MotivoDaRecusa);
+        Assert.Equal(detalhe, cobranca.MotivoDaRecusa);
     }
 
     [Theory]
-    [InlineData("pending")]
-    [InlineData("in_process")]
-    [InlineData("authorized")]
+    [InlineData("created")]
+    [InlineData("action_required")]
+    [InlineData("processing")]
+    [InlineData("refunded")]
     [InlineData("um_status_que_ainda_nao_existe")]
-    public async Task Status_que_nao_e_aprovado_nem_recusado_fica_pendente(string status)
+    public async Task Status_que_nao_e_pago_nem_recusado_fica_pendente(string status)
     {
-        // Tratar desconhecido como recusa cancelaria ordem paga. O Mercado Pago
-        // já introduziu status novo antes, e vai introduzir de novo.
-        var http = ClienteQueResponde(HttpStatusCode.OK, $$"""
-            {"id": 1, "status": "{{status}}"}
-            """);
+        // Tratar desconhecido como recusa cancelaria ordem paga. E refunded é
+        // consequência de um estorno nosso, não um pagamento recusado.
+        var http = ClienteQueResponde(HttpStatusCode.OK, PedidoJson(status));
 
-        var cobranca = await new GatewayMercadoPago(http, "token-teste").ConsultarAsync("1");
+        var cobranca = await new GatewayMercadoPago(http, "token-teste").ConsultarAsync(Pedido);
 
         Assert.Equal(EResultadoDaCobranca.Pendente, cobranca.Resultado);
     }
 
     [Theory]
     [InlineData("../users/me")]
-    [InlineData("123/../../v1/customers")]
-    [InlineData("123?access_token=x")]
+    [InlineData("ORD123/../../v1/customers")]
+    [InlineData("ORD123?access_token=x")]
+    [InlineData("ord01abc")]
+    [InlineData("123456789")]
     [InlineData("")]
-    [InlineData("123456789012345678901")]
+    [InlineData("ORD")]
     public async Task Referencia_fora_do_formato_nao_vira_chamada_ao_adquirente(string referencia)
     {
         // A chamada leva o nosso token. Um id com "../" faria o gateway
         // consultar outro endpoint do Mercado Pago com a nossa credencial — a
         // vulnerabilidade que o SonarCloud apontou (S7044).
-        var http = ClienteQueResponde(HttpStatusCode.OK, """{"id": 1, "status": "approved"}""");
+        var http = ClienteQueResponde(HttpStatusCode.OK, PedidoJson("processed"));
 
         await Assert.ThrowsAsync<ArgumentException>(
             () => new GatewayMercadoPago(http, "token-teste").ConsultarAsync(referencia));
     }
 
     [Theory]
-    [InlineData("1", true)]
-    [InlineData("1234567890", true)]
-    [InlineData("12a", false)]
+    [InlineData("ORD01JP84C939T20S0P1DN382FQ6K", true)]
+    [InlineData("ORDTST01M6FNERF8J3WVYYTX6V9BQ3H8", true)]
+    [InlineData("ORD01-ABC", false)]
+    [InlineData("PAY01JP84C939", false)]
     [InlineData(null, false)]
-    public void Referencia_valida_e_so_digitos(string? referencia, bool valida)
+    public void Referencia_valida_e_id_de_pedido(string? referencia, bool valida)
     {
         Assert.Equal(valida, GatewayMercadoPago.ReferenciaValida(referencia));
     }
@@ -319,23 +327,22 @@ public class GatewayMercadoPagoTests
     [Fact]
     public async Task Pix_devolve_o_link_de_pagamento()
     {
-        var http = ClienteQueResponde(HttpStatusCode.Created, """
-            {"id": 55, "status": "pending",
-             "point_of_interaction": {"transaction_data": {"ticket_url": "https://mp/pix/55"}}}
-            """);
+        var http = ClienteQueResponde(HttpStatusCode.Created,
+            PedidoJson("action_required", "waiting_transfer", ticket: "https://mp/pix/55"));
 
         var cobranca = await new GatewayMercadoPago(http, "token-teste")
             .CriarCobrancaAsync(UmOrcamento(), "corr-1");
 
+        Assert.Equal(EResultadoDaCobranca.Pendente, cobranca.Resultado);
         Assert.Equal("https://mp/pix/55", cobranca.UrlDePagamento);
     }
 
     [Fact]
     public async Task Erro_do_adquirente_estoura_com_o_corpo_no_texto()
     {
-        // Precisa estourar, e não devolver pendente em silêncio: o outbox
-        // reagenda e tenta de novo, e uma falha engolida viraria uma ordem
-        // travada esperando um pagamento que nunca foi criado.
+        // Precisa estourar, e não devolver pendente em silêncio: uma falha
+        // engolida viraria uma ordem travada esperando um pagamento que nunca
+        // foi criado.
         var http = ClienteQueResponde(HttpStatusCode.BadRequest, """{"message": "invalid payer email"}""");
 
         var erro = await Assert.ThrowsAsync<HttpRequestException>(
@@ -346,19 +353,75 @@ public class GatewayMercadoPagoTests
     }
 
     [Fact]
-    public async Task A_requisicao_leva_chave_de_idempotencia_e_correlation()
+    public async Task O_pedido_vai_para_a_API_de_Orders_com_idempotencia_e_correlation()
     {
         // Sem a chave de idempotência, um timeout de rede e o retry seguinte
         // criariam duas cobranças para o mesmo orçamento.
-        var espiao = new RespostaFixa(HttpStatusCode.Created, """{"id": 1, "status": "approved"}""");
+        var espiao = new RespostaFixa(HttpStatusCode.Created, PedidoJson("action_required"));
         var http = new HttpClient(espiao) { BaseAddress = new Uri("https://api.mercadopago.com") };
 
         var orcamento = UmOrcamento();
         await new GatewayMercadoPago(http, "token-teste").CriarCobrancaAsync(orcamento, "corr-42");
 
-        Assert.Equal(orcamento.Id, espiao.UltimaRequisicao!.Headers.GetValues("X-Idempotency-Key").Single());
-        Assert.Equal("corr-42", espiao.UltimaRequisicao.Headers.GetValues("X-Correlation-ID").Single());
-        Assert.Equal("Bearer", espiao.UltimaRequisicao.Headers.Authorization!.Scheme);
+        var requisicao = espiao.UltimaRequisicao!;
+        Assert.Equal("/v1/orders", requisicao.RequestUri!.AbsolutePath);
+        Assert.Equal(orcamento.Id, requisicao.Headers.GetValues("X-Idempotency-Key").Single());
+        Assert.Equal("corr-42", requisicao.Headers.GetValues("X-Correlation-ID").Single());
+        Assert.Equal("Bearer", requisicao.Headers.Authorization!.Scheme);
+    }
+
+    [Fact]
+    public async Task O_corpo_do_pedido_segue_o_contrato_da_API_de_Orders()
+    {
+        var espiao = new RespostaFixa(HttpStatusCode.Created, PedidoJson("action_required"));
+        var http = new HttpClient(espiao) { BaseAddress = new Uri("https://api.mercadopago.com") };
+
+        var orcamento = UmOrcamento();
+        await new GatewayMercadoPago(http, "token-teste").CriarCobrancaAsync(orcamento, "corr-1");
+
+        using var corpo = System.Text.Json.JsonDocument.Parse(espiao.UltimoCorpo!);
+        var raiz = corpo.RootElement;
+
+        Assert.Equal("online", raiz.GetProperty("type").GetString());
+        Assert.Equal("automatic", raiz.GetProperty("processing_mode").GetString());
+
+        // Valor como texto, com ponto e duas casas, em qualquer cultura.
+        Assert.Equal("198.30", raiz.GetProperty("total_amount").GetString());
+        Assert.Equal(orcamento.Id, raiz.GetProperty("external_reference").GetString());
+        Assert.Equal("ana@oficina.test", raiz.GetProperty("payer").GetProperty("email").GetString());
+        Assert.Equal("Ana", raiz.GetProperty("payer").GetProperty("first_name").GetString());
+
+        var pagamento = raiz.GetProperty("transactions").GetProperty("payments")[0];
+        Assert.Equal("198.30", pagamento.GetProperty("amount").GetString());
+        Assert.Equal("pix", pagamento.GetProperty("payment_method").GetProperty("id").GetString());
+        Assert.Equal("bank_transfer", pagamento.GetProperty("payment_method").GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public async Task No_sandbox_o_pagador_de_teste_substitui_o_nome_do_cliente()
+    {
+        // "APRO" é o nome que faz o Mercado Pago aprovar o Pix de teste
+        // sozinho. Sem ele, ninguém paga e a saga fica esperando.
+        var espiao = new RespostaFixa(HttpStatusCode.Created, PedidoJson("action_required"));
+        var http = new HttpClient(espiao) { BaseAddress = new Uri("https://api.mercadopago.com") };
+
+        await new GatewayMercadoPago(http, "token-teste", nomeDoPagadorDeTeste: "APRO")
+            .CriarCobrancaAsync(UmOrcamento(), "corr-1");
+
+        using var corpo = System.Text.Json.JsonDocument.Parse(espiao.UltimoCorpo!);
+        Assert.Equal("APRO", corpo.RootElement.GetProperty("payer").GetProperty("first_name").GetString());
+    }
+
+    [Fact]
+    public async Task A_consulta_vai_no_pedido_pelo_id()
+    {
+        var espiao = new RespostaFixa(HttpStatusCode.OK, PedidoJson("processed", "accredited"));
+        var http = new HttpClient(espiao) { BaseAddress = new Uri("https://api.mercadopago.com") };
+
+        var cobranca = await new GatewayMercadoPago(http, "token-teste").ConsultarAsync(Pedido);
+
+        Assert.Equal($"/v1/orders/{Pedido}", espiao.UltimaRequisicao!.RequestUri!.AbsolutePath);
+        Assert.Equal(EResultadoDaCobranca.Aprovada, cobranca.Resultado);
     }
 
     [Fact]
@@ -371,15 +434,19 @@ public class GatewayMercadoPagoTests
     {
         public HttpRequestMessage? UltimaRequisicao { get; private set; }
 
-        protected override Task<HttpResponseMessage> SendAsync(
+        /// <summary>O corpo enviado, lido antes de a requisição ser descartada.</summary>
+        public string? UltimoCorpo { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             UltimaRequisicao = request;
+            UltimoCorpo = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
 
-            return Task.FromResult(new HttpResponseMessage(codigo)
+            return new HttpResponseMessage(codigo)
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json"),
-            });
+            };
         }
     }
 }

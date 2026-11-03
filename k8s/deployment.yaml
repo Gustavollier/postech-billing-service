@@ -49,6 +49,11 @@ spec:
             # só a cobrança não funciona. Marcar como obrigatório faria o pod
             # ficar em CreateContainerConfigError por causa de uma credencial
             # de sandbox.
+            # Só sandbox: com "APRO" no primeiro nome do pagador, o Mercado Pago
+            # aprova o Pix de teste sozinho e manda o webhook, como faria com um
+            # pagamento de verdade. Em produção, esta variável sai.
+            - name: MercadoPago__NomeDoPagadorDeTeste
+              value: APRO
             - name: MercadoPago__AccessToken
               valueFrom:
                 secretKeyRef:

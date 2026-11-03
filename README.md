@@ -67,21 +67,42 @@ latência de rede.
 
 ## Pagamento
 
-O fluxo tem três pontos que valem explicar.
+A cobrança é um **pedido Pix na API de Orders** do Mercado Pago (`POST /v1/orders`).
+
+**Por que a API de Orders.** Até a Fase 4 o Billing usava a API de
+pagamentos (`/v1/payments`). Nas contas novas do Mercado Pago, a credencial de
+teste de uma aplicação de Checkout Transparente só funciona na de Orders: na
+antiga ela devolve `401 Unauthorized use of live credentials`, com qualquer
+pagador. Foi o que travou o pagamento no sandbox, e um pedido Pix criado direto
+na API de Orders, com o mesmo token, confirmou a causa.
 
 **A ordem na aprovação.** Primeiro grava a aprovação com o `OrcamentoAprovado`
 enfileirado na mesma escrita; só então cria a cobrança. Cobrar antes de
 registrar deixaria cobrança órfã se o banco falhasse em seguida.
 
-**Idempotência na cobrança.** A chamada ao Mercado Pago vai com
-`X-Idempotency-Key` igual ao id do orçamento. Dois cliques em "pagar" não geram
-duas cobranças.
+**Idempotência na cobrança.** O pedido vai com `X-Idempotency-Key` igual ao id
+do orçamento. Dois cliques em "pagar" não geram duas cobranças.
 
-**O webhook não é tratado como verdade.** A rota é pública — qualquer um pode
-fazer um POST nela. A notificação diz apenas que algo mudou; quem diz o que
-aconteceu é a consulta de volta ao adquirente. E a resposta é 200 mesmo quando
-não há nada a fazer, porque o Mercado Pago reenvia até receber 2xx e devolver
-erro para notificação já processada vira tempestade de reenvio.
+**O webhook não é tratado como verdade.** A rota é pública, e qualquer um pode
+fazer um POST nela. A notificação (tópico `order`) diz apenas que o pedido
+mudou; quem diz o que aconteceu é a consulta de volta (`GET /v1/orders/{id}`).
+E só se consulta pedido que **nós criamos**: um id que não está em nenhum
+orçamento é descartado antes de qualquer chamada, e o id fora do formato
+(`ORD` e letras maiúsculas ou dígitos) é recusado pelo gateway. Sem isso,
+a nossa credencial seria usada para chamar o caminho que quem fez o POST
+quisesse. A resposta é 200 mesmo quando não há nada a fazer, porque o
+Mercado Pago reenvia até receber 2xx.
+
+**Tradução dos status.** `processed` é pago; `failed` e `canceled` são
+recusa; todo o resto (`action_required` enquanto o Pix espera, `processing`,
+`refunded` e qualquer status novo) não é fato novo de pagamento. Tratar
+desconhecido como recusa cancelaria ordem paga.
+
+**Sandbox.** Com `MercadoPago__NomeDoPagadorDeTeste=APRO`, o pedido vai com
+esse primeiro nome, e o Mercado Pago aprova o Pix de teste sozinho, mandando o
+webhook como faria com um pagamento real. É o que deixa o fluxo do vídeo
+completo sem simular nada. Em produção a variável não existe e vai o nome do
+cliente.
 
 **Sem token configurado o serviço sobe.** Em vez de estourar na partida, entra
 um gateway que recusa toda cobrança dizendo o que falta. O resto do Billing —
@@ -122,7 +143,7 @@ há script de schema a rodar à mão.
 dotnet test
 ```
 
-**73 testes, 90% de cobertura de linha.** Os de integração sobem MongoDB e
+**91 testes, 90% de cobertura de linha.** Os de integração sobem MongoDB e
 RabbitMQ de verdade via Testcontainers — precisa de Docker. Dublê não prova
 atomicidade de escrita nem índice único, que é justamente o que mais importa
 aqui: o índice por ordem é o que impede duas entregas do mesmo
@@ -171,6 +192,7 @@ A pipeline **reprova abaixo de 80% de cobertura**.
 | `MongoDatabase` | Nome do banco. Padrão `billing-db` |
 | `MercadoPago__AccessToken` | Token do adquirente. **Opcional** — sem ele a cobrança fica indisponível |
 | `MercadoPago__BaseUrl` | Padrão `https://api.mercadopago.com` |
+| `MercadoPago__NomeDoPagadorDeTeste` | Só sandbox: `APRO` faz o Pix de teste ser aprovado sozinho |
 
 As duas primeiras são obrigatórias e o serviço **se recusa a subir sem elas** —
 falhar na partida é melhor que descobrir na primeira requisição.
