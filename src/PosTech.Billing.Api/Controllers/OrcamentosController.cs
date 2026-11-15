@@ -46,6 +46,7 @@ public sealed class OrcamentosController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    [ProducesResponseType(StatusCodes.Status504GatewayTimeout)]
     public async Task<IActionResult> Aprovar(int idOrdem, CancellationToken cancellationToken)
     {
         var orcamento = await _orcamentos.ObterPorOrdemAsync(idOrdem, cancellationToken);
@@ -84,6 +85,15 @@ public sealed class OrcamentosController : ControllerBase
             return StatusCode(StatusCodes.Status503ServiceUnavailable, new
             {
                 erro = excecao.Message,
+            });
+        }
+        catch (GatewayMercadoPagoTimeoutException excecao)
+        {
+            _log.LogError(excecao, "Timeout ao criar cobrança da ordem {IdOrdem}.", idOrdem);
+
+            return StatusCode(StatusCodes.Status504GatewayTimeout, new
+            {
+                erro = "O Mercado Pago não respondeu dentro do prazo. Tente novamente.",
             });
         }
         catch (HttpRequestException excecao)

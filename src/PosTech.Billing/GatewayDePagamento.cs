@@ -19,6 +19,14 @@ public sealed record Cobranca(
     string? MotivoDaRecusa,
     string? UrlDePagamento);
 
+public sealed class GatewayMercadoPagoTimeoutException : TimeoutException
+{
+    public GatewayMercadoPagoTimeoutException(Exception innerException)
+        : base("O Mercado Pago não respondeu dentro do prazo configurado.", innerException)
+    {
+    }
+}
+
 /// <summary>
 /// Quem cobra o cliente.
 ///
@@ -131,11 +139,18 @@ public sealed class GatewayMercadoPago : IGatewayDePagamento
         requisicao.Headers.Add("X-Idempotency-Key", orcamento.Id);
         requisicao.Headers.Add("X-Correlation-ID", correlationId);
 
-        using var resposta = await _http.SendAsync(requisicao, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var resposta = await _http.SendAsync(requisicao, cancellationToken).ConfigureAwait(false);
 
-        var corpo = await LerAsync(resposta, cancellationToken).ConfigureAwait(false);
+            var corpo = await LerAsync(resposta, cancellationToken).ConfigureAwait(false);
 
-        return Traduzir(corpo);
+            return Traduzir(corpo);
+        }
+        catch (TaskCanceledException excecao) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new GatewayMercadoPagoTimeoutException(excecao);
+        }
     }
 
     public async Task<Cobranca> ConsultarAsync(string referenciaExterna, CancellationToken cancellationToken = default)
@@ -151,11 +166,18 @@ public sealed class GatewayMercadoPago : IGatewayDePagamento
         using var requisicao = new HttpRequestMessage(HttpMethod.Get, $"/v1/orders/{Uri.EscapeDataString(referenciaExterna)}");
         requisicao.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
 
-        using var resposta = await _http.SendAsync(requisicao, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var resposta = await _http.SendAsync(requisicao, cancellationToken).ConfigureAwait(false);
 
-        var corpo = await LerAsync(resposta, cancellationToken).ConfigureAwait(false);
+            var corpo = await LerAsync(resposta, cancellationToken).ConfigureAwait(false);
 
-        return Traduzir(corpo);
+            return Traduzir(corpo);
+        }
+        catch (TaskCanceledException excecao) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new GatewayMercadoPagoTimeoutException(excecao);
+        }
     }
 
     private static async Task<RespostaDoPedido> LerAsync(HttpResponseMessage resposta, CancellationToken cancellationToken)
