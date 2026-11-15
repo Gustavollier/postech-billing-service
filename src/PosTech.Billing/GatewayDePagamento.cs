@@ -69,6 +69,14 @@ public sealed class GatewayMercadoPago : IGatewayDePagamento
     /// <summary>Id de pedido da API de Orders: "ORD" e letras maiúsculas ou dígitos.</summary>
     private const int TamanhoMaximoDaReferencia = 64;
 
+    /// <summary>
+    /// O que o cliente lê no extrato. Sem isto, a cobrança aparece com um nome
+    /// que ele não reconhece, e cobrança não reconhecida vira pedido de
+    /// estorno — é por isso que o Mercado Pago trata como obrigatório.
+    /// Maiúsculas e sem acento: é como o extrato exibe.
+    /// </summary>
+    private const string DescricaoNoExtrato = "OFICINAPOSTECH";
+
     private readonly HttpClient _http;
     private readonly string _accessToken;
     private readonly string? _nomeDoPagadorDeTeste;
@@ -100,6 +108,25 @@ public sealed class GatewayMercadoPago : IGatewayDePagamento
         // independentemente da cultura do servidor.
         var valor = orcamento.Valor.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
 
+        // O detalhe do orçamento vai para o adquirente item por item, e não só
+        // como total. Três exigências da Qualidade da Integração do Mercado
+        // Pago dependem disto — quantidade, preço unitário e descrição — e a
+        // medição reprovava a integração com 18 de 100 por mandarmos apenas
+        // total_amount. Para o cliente, é o que aparece discriminado no
+        // comprovante em vez de um valor solto.
+        //
+        // Formato verificado contra a API: items fica na RAIZ do pedido e
+        // aceita title, unit_price e quantity. unit_measure é recusado
+        // ("additionalProperties not allowed"), e por isso não vai.
+        var itens = orcamento.Itens
+            .Select(i => new
+            {
+                title = i.Descricao,
+                unit_price = i.ValorUnitario.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture),
+                quantity = i.Quantidade,
+            })
+            .ToArray();
+
         var pedido = new
         {
             type = "online",
@@ -108,6 +135,8 @@ public sealed class GatewayMercadoPago : IGatewayDePagamento
             // O id do orçamento volta na notificação e na consulta. É por ele
             // que se acha a ordem sem depender de outro estado.
             external_reference = orcamento.Id,
+            description = $"Ordem de serviço {orcamento.IdOrdem} — oficina",
+            items = itens,
             payer = new
             {
                 email = orcamento.EmailCliente,
@@ -120,7 +149,16 @@ public sealed class GatewayMercadoPago : IGatewayDePagamento
                     new
                     {
                         amount = valor,
-                        payment_method = new { id = "pix", type = "bank_transfer" },
+                        // statement_descriptor fica DENTRO do payment_method: na
+                        // raiz a API recusa. É o nome que o cliente vê no
+                        // extrato, e o que evita que ele não reconheça a
+                        // cobrança e peça estorno.
+                        payment_method = new
+                        {
+                            id = "pix",
+                            type = "bank_transfer",
+                            statement_descriptor = DescricaoNoExtrato,
+                        },
                     },
                 },
             },
