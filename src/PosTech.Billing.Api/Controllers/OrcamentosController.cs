@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using PosTech.Billing.Api.Infra;
 
 namespace PosTech.Billing.Api.Controllers;
 
@@ -44,6 +45,7 @@ public sealed class OrcamentosController : ControllerBase
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
     public async Task<IActionResult> Aprovar(int idOrdem, CancellationToken cancellationToken)
     {
         var orcamento = await _orcamentos.ObterPorOrdemAsync(idOrdem, cancellationToken);
@@ -74,6 +76,15 @@ public sealed class OrcamentosController : ControllerBase
                 PagamentoDoOrcamento.Recusar(orcamento, cobranca.MotivoDaRecusa ?? "Recusado pelo adquirente", correlationId, DateTime.UtcNow);
 
             await _orcamentos.SalvarAsync(orcamento, cancellationToken);
+        }
+        catch (GatewayIndisponivelException excecao)
+        {
+            _log.LogError(excecao, "Mercado Pago indisponível para a ordem {IdOrdem}.", idOrdem);
+
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+            {
+                erro = excecao.Message,
+            });
         }
         catch (HttpRequestException excecao)
         {
