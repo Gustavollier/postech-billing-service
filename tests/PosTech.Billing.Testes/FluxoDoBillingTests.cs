@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using MongoDB.Driver;
+using PosTech.Billing.Api.Infra;
 using PosTech.Contratos;
 
 namespace PosTech.Billing.Testes;
@@ -207,6 +208,115 @@ public class FluxoDoBillingTests
 
         Assert.Equal(EStatusOrcamento.Aprovado, orcamento!.Status);
         Assert.Equal(EStatusDoPagamento.SemCobranca, orcamento.StatusDoPagamento);
+    }
+
+    [Fact]
+    public async Task Repetir_a_aprovacao_depois_da_falha_retoma_so_a_cobranca()
+    {
+        // Sem este caminho a saga parava para sempre: a aprovação valia, o
+        // OrcamentoAprovado saía, e nenhuma segunda chamada conseguia criar a
+        // cobrança — o 409 da aprovação repetida barrava a retomada.
+        _ambiente.Gateway.Falha = new HttpRequestException("adquirente fora do ar");
+
+        await _ambiente.PublicarComoAsync(Diagnostico(1020), "execucao-service", "corr-1020");
+        await EsperarOrcamentoAsync(1020);
+
+        var primeira = await _ambiente.Cliente().PostAsync("/api/v1/orcamentos/os/1020/aprovar", null);
+        Assert.Equal(HttpStatusCode.BadGateway, primeira.StatusCode);
+
+        _ambiente.Gateway.Falha = null;
+
+        var segunda = await _ambiente.Cliente().PostAsync("/api/v1/orcamentos/os/1020/aprovar", null);
+        Assert.Equal(HttpStatusCode.OK, segunda.StatusCode);
+
+        var orcamento = await _ambiente.OrcamentoDaOrdemAsync(1020);
+
+        Assert.Equal(EStatusOrcamento.Aprovado, orcamento!.Status);
+        Assert.Equal(EStatusDoPagamento.Aguardando, orcamento.StatusDoPagamento);
+        Assert.NotNull(orcamento.ReferenciaExterna);
+
+        // Uma cobrança só: a primeira tentativa morreu antes de criar nada.
+        Assert.Single(_ambiente.Gateway.Cobradas);
+    }
+
+    [Fact]
+    public async Task Repetir_a_aprovacao_com_cobranca_criada_continua_dando_409()
+    {
+        // A retomada é só para aprovação sem cobrança. Com cobrança no
+        // adquirente, repetir viraria cobrança dobrada.
+        await _ambiente.PublicarComoAsync(Diagnostico(1021), "execucao-service", "corr-1021");
+        await EsperarOrcamentoAsync(1021);
+
+        var primeira = await _ambiente.Cliente().PostAsync("/api/v1/orcamentos/os/1021/aprovar", null);
+        Assert.Equal(HttpStatusCode.OK, primeira.StatusCode);
+
+        var segunda = await _ambiente.Cliente().PostAsync("/api/v1/orcamentos/os/1021/aprovar", null);
+
+        Assert.Equal(HttpStatusCode.Conflict, segunda.StatusCode);
+        Assert.Single(_ambiente.Gateway.Cobradas);
+    }
+
+    [Fact]
+    public async Task Sem_token_configurado_devolve_503_e_nao_finge_recusa()
+    {
+        // Configuração ausente não é recusa do cliente. Fingir recusa aqui
+        // fazia a saga compensar pelo motivo errado, e no painel aparecia
+        // "pagamento recusado" onde o que faltava era uma variável.
+        _ambiente.Gateway.Falha = new GatewayIndisponivelException();
+
+        await _ambiente.PublicarComoAsync(Diagnostico(1022), "execucao-service", "corr-1022");
+        await EsperarOrcamentoAsync(1022);
+
+        var resposta = await _ambiente.Cliente().PostAsync("/api/v1/orcamentos/os/1022/aprovar", null);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, resposta.StatusCode);
+
+        var orcamento = await _ambiente.OrcamentoDaOrdemAsync(1022);
+
+        Assert.Equal(EStatusDoPagamento.SemCobranca, orcamento!.StatusDoPagamento);
+        Assert.Null(orcamento.MotivoDaRecusaDoPagamento);
+    }
+
+    [Fact]
+    public async Task Timeout_do_adquirente_devolve_504()
+    {
+        _ambiente.Gateway.Falha = new GatewayMercadoPagoTimeoutException(new TaskCanceledException());
+
+        await _ambiente.PublicarComoAsync(Diagnostico(1023), "execucao-service", "corr-1023");
+        await EsperarOrcamentoAsync(1023);
+
+        var resposta = await _ambiente.Cliente().PostAsync("/api/v1/orcamentos/os/1023/aprovar", null);
+
+        Assert.Equal(HttpStatusCode.GatewayTimeout, resposta.StatusCode);
+
+        var orcamento = await _ambiente.OrcamentoDaOrdemAsync(1023);
+
+        Assert.Equal(EStatusDoPagamento.SemCobranca, orcamento!.StatusDoPagamento);
+    }
+
+    [Fact]
+    public async Task Timeout_na_consulta_do_webhook_devolve_502_para_o_adquirente_reenviar()
+    {
+        await _ambiente.PublicarComoAsync(Diagnostico(1024), "execucao-service", "corr-1024");
+        await EsperarOrcamentoAsync(1024);
+
+        await _ambiente.Cliente("corr-1024").PostAsync("/api/v1/orcamentos/os/1024/aprovar", null);
+
+        var orcamento = await _ambiente.OrcamentoDaOrdemAsync(1024);
+        var referencia = orcamento!.ReferenciaExterna;
+
+        Assert.NotNull(referencia);
+
+        _ambiente.Gateway.FalhaNaConsulta =
+            new GatewayMercadoPagoTimeoutException(new TaskCanceledException());
+
+        var resposta = await _ambiente.Cliente().PostAsJsonAsync(
+            "/api/v1/pagamentos/webhook",
+            new { type = "order", data = new { id = referencia } });
+
+        // 502, e não 500: o reenvio do Mercado Pago é exatamente o que resolve
+        // uma consulta que não aconteceu.
+        Assert.Equal(HttpStatusCode.BadGateway, resposta.StatusCode);
     }
 
     [Fact]
