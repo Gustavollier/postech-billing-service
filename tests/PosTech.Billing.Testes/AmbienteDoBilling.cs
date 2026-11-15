@@ -143,8 +143,14 @@ public sealed class GatewayFalso : IGatewayDePagamento
     /// <summary>As referências que alguém pediu para consultar no adquirente.</summary>
     public System.Collections.Concurrent.ConcurrentBag<string> Consultadas { get; } = [];
 
+    /// <summary>Quando preenchido, a consulta ao adquirente falha com isto.</summary>
+    public Exception? FalhaNaConsulta { get; set; }
+
     public Task<Cobranca> ConsultarAsync(string referenciaExterna, CancellationToken cancellationToken = default)
     {
+        if (FalhaNaConsulta is not null)
+            throw FalhaNaConsulta;
+
         Consultadas.Add(referenciaExterna);
         return Task.FromResult(Resposta with { ReferenciaExterna = referenciaExterna });
     }
@@ -152,6 +158,7 @@ public sealed class GatewayFalso : IGatewayDePagamento
     public void Reiniciar()
     {
         Falha = null;
+        FalhaNaConsulta = null;
         Cobradas.Clear();
         Resposta = new Cobranca(EResultadoDaCobranca.Pendente, string.Empty, null, "https://pagar.test");
     }

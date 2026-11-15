@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using PosTech.Billing.Api.Infra;
 
 namespace PosTech.Billing.Api.Controllers;
 
@@ -71,6 +72,21 @@ public sealed class PagamentosController : ControllerBase
         try
         {
             cobranca = await _pagamentos.ConsultarAsync(idExterno, cancellationToken);
+        }
+        catch (GatewayMercadoPagoTimeoutException excecao)
+        {
+            // Mesmo caso do HttpRequestException logo abaixo: a consulta não
+            // aconteceu, e o reenvio do Mercado Pago é o que resolve.
+            _log.LogError(excecao, "Timeout ao consultar o pagamento {IdExterno}.", idExterno);
+            return StatusCode(StatusCodes.Status502BadGateway, new { erro = "O Mercado Pago não respondeu dentro do prazo." });
+        }
+        catch (GatewayIndisponivelException excecao)
+        {
+            // Falta token configurado. Reenvio não resolve configuração: pedir
+            // para o Mercado Pago tentar de novo só geraria tempestade. 200 e
+            // o erro no log, que é onde alguém pode agir.
+            _log.LogError(excecao, "Webhook recebido sem Mercado Pago configurado; pagamento {IdExterno} não foi consultado.", idExterno);
+            return Ok(new { recebido = true });
         }
         catch (HttpRequestException excecao)
         {

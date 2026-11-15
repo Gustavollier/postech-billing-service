@@ -54,13 +54,31 @@ public sealed class OrcamentosController : ControllerBase
         if (orcamento is null)
             return NotFound();
 
-        if (orcamento.Status != EStatusOrcamento.Pendente)
+        // Aprovado e ainda sem cobrança é a marca de uma tentativa anterior que
+        // morreu no adquirente (503, 504 ou 502 abaixo). A aprovação já valeu e
+        // o OrcamentoAprovado já saiu: repetir a chamada retoma de onde parou,
+        // só a cobrança. Sem isto o "tente novamente" daquelas respostas caía
+        // no 409 logo abaixo, e a saga ficava esperando um pagamento que nunca
+        // seria tentado de novo.
+        var retomandoCobranca =
+            orcamento.Status == EStatusOrcamento.Aprovado &&
+            orcamento.StatusDoPagamento == EStatusDoPagamento.SemCobranca;
+
+        if (orcamento.Status != EStatusOrcamento.Pendente && !retomandoCobranca)
             return Conflict(new { erro = $"Este orçamento já está {orcamento.Status}." });
 
         var correlationId = CorrelationId();
 
-        MontadorDeOrcamento.Aprovar(orcamento, correlationId, DateTime.UtcNow);
-        await _orcamentos.SalvarAsync(orcamento, cancellationToken);
+        if (retomandoCobranca)
+        {
+            _log.LogWarning(
+                "Retomando a cobrança da ordem {IdOrdem}: aprovada, mas sem cobrança no adquirente.", idOrdem);
+        }
+        else
+        {
+            MontadorDeOrcamento.Aprovar(orcamento, correlationId, DateTime.UtcNow);
+            await _orcamentos.SalvarAsync(orcamento, cancellationToken);
+        }
 
         try
         {
