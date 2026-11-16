@@ -16,6 +16,11 @@ spec:
       labels:
         app: billing-api
         tags.datadoghq.com/service: billing-service
+        # Sem este rótulo o admission controller do Datadog ignora o pod: o
+        # cluster agent roda com mutateUnlabelled=false, então a anotação da
+        # versão do tracer logo abaixo, sozinha, não injeta nada. Os logs
+        # chegavam ao Datadog e o APM ficava vazio.
+        admission.datadoghq.com/enabled: "true"
       annotations:
         # O admission controller do Datadog injeta o tracer .NET a partir deste
         # label, sem tocar no Dockerfile. É a observabilidade da Fase 3
@@ -32,6 +37,10 @@ spec:
           ports:
             - containerPort: 8080
           env:
+            # Põe o id do trace em cada linha de log, para o Datadog ligar o
+            # log ao trace da mesma requisição.
+            - name: DD_LOGS_INJECTION
+              value: "true"
             - name: MongoConnectionString
               valueFrom:
                 secretKeyRef:
