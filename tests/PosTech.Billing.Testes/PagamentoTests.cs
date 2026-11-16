@@ -231,6 +231,46 @@ public class GatewayMercadoPagoTests
     private static HttpClient ClienteQueResponde(HttpStatusCode codigo, string json) =>
         new(new RespostaFixa(codigo, json)) { BaseAddress = new Uri("https://api.mercadopago.com") };
 
+    [Fact]
+    public async Task O_pedido_leva_os_itens_do_orcamento_e_a_descricao_do_extrato()
+    {
+        // Mandar só total_amount reprovava a Qualidade da Integração do Mercado
+        // Pago em três requisitos obrigatórios de uma vez: quantidade, preço
+        // unitário e descrição na fatura. O detalhe do orçamento resolve os
+        // três, e este teste é o que impede a regressão silenciosa — o adquirente
+        // aceitaria o pedido sem os itens sem reclamar nada.
+        var espiao = new RespostaFixa(HttpStatusCode.Created, PedidoJson("action_required"));
+        var http = new HttpClient(espiao) { BaseAddress = new Uri("https://api.mercadopago.com") };
+
+        var orcamento = UmOrcamento();
+        await new GatewayMercadoPago(http, "token-teste").CriarCobrancaAsync(orcamento, "corr-1");
+
+        using var corpo = System.Text.Json.JsonDocument.Parse(espiao.UltimoCorpo!);
+        var raiz = corpo.RootElement;
+
+        // items fica na raiz: dentro de transactions a API recusa.
+        var itens = raiz.GetProperty("items");
+        Assert.Equal(orcamento.Itens.Count, itens.GetArrayLength());
+
+        var primeiro = itens[0];
+        Assert.Equal(orcamento.Itens[0].Descricao, primeiro.GetProperty("title").GetString());
+        Assert.Equal(orcamento.Itens[0].Quantidade, primeiro.GetProperty("quantity").GetInt32());
+        // Valor como texto com ponto, igual ao total: a API recusa número.
+        Assert.Equal("198.30", primeiro.GetProperty("unit_price").GetString());
+
+        // unit_measure é recusado pela API ("additionalProperties not allowed"),
+        // então não pode voltar a aparecer aqui.
+        Assert.False(primeiro.TryGetProperty("unit_measure", out _));
+
+        Assert.Contains($"{orcamento.IdOrdem}", raiz.GetProperty("description").GetString());
+
+        // statement_descriptor vive dentro do payment_method — na raiz a API
+        // recusa o pedido inteiro.
+        var meio = raiz.GetProperty("transactions").GetProperty("payments")[0].GetProperty("payment_method");
+        Assert.Equal("OFICINAPOSTECH", meio.GetProperty("statement_descriptor").GetString());
+        Assert.False(raiz.TryGetProperty("statement_descriptor", out _));
+    }
+
     private static Orcamento UmOrcamento()
     {
         var orcamento = MontadorDeOrcamento.Montar(
