@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using PosTech.Billing.Api.Infra;
+using PosTech.Seguranca;
 
 namespace PosTech.Billing.Api.Controllers;
 
@@ -7,6 +8,7 @@ public sealed record RejeitarRequest(string Motivo);
 
 [ApiController]
 [Route("api/v1/orcamentos")]
+[Exige(Perfil.Autenticado)]
 public sealed class OrcamentosController : ControllerBase
 {
     private readonly IOrcamentoRepositorio _orcamentos;
@@ -28,7 +30,7 @@ public sealed class OrcamentosController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> PorOrdem(int idOrdem, CancellationToken cancellationToken)
     {
-        var orcamento = await _orcamentos.ObterPorOrdemAsync(idOrdem, cancellationToken);
+        var orcamento = await OrcamentoVisivelAsync(idOrdem, cancellationToken);
 
         return orcamento is null ? NotFound() : Ok(Mapear(orcamento));
     }
@@ -49,7 +51,7 @@ public sealed class OrcamentosController : ControllerBase
     [ProducesResponseType(StatusCodes.Status504GatewayTimeout)]
     public async Task<IActionResult> Aprovar(int idOrdem, CancellationToken cancellationToken)
     {
-        var orcamento = await _orcamentos.ObterPorOrdemAsync(idOrdem, cancellationToken);
+        var orcamento = await OrcamentoVisivelAsync(idOrdem, cancellationToken);
 
         if (orcamento is null)
             return NotFound();
@@ -136,7 +138,7 @@ public sealed class OrcamentosController : ControllerBase
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Rejeitar(int idOrdem, [FromBody] RejeitarRequest corpo, CancellationToken cancellationToken)
     {
-        var orcamento = await _orcamentos.ObterPorOrdemAsync(idOrdem, cancellationToken);
+        var orcamento = await OrcamentoVisivelAsync(idOrdem, cancellationToken);
 
         if (orcamento is null)
             return NotFound();
@@ -177,6 +179,20 @@ public sealed class OrcamentosController : ControllerBase
         criadoEm = o.CriadoEm,
         pagoEm = o.PagoEm,
     };
+
+    /// <summary>
+    /// O orçamento, se quem chama pode vê-lo: a equipe vê todos, o cliente só o
+    /// dele. O de outro cliente responde como inexistente — ler, aprovar e
+    /// rejeitar passam por aqui, então nenhum dos três alcança orçamento alheio.
+    /// </summary>
+    private async Task<Orcamento?> OrcamentoVisivelAsync(int idOrdem, CancellationToken cancellationToken)
+    {
+        var orcamento = await _orcamentos.ObterPorOrdemAsync(idOrdem, cancellationToken);
+
+        return orcamento is not null && QuemChama.De(HttpContext).PodeVerDadosDoCliente(orcamento.IdCliente)
+            ? orcamento
+            : null;
+    }
 
     private string CorrelationId() =>
         Request.Headers.TryGetValue("X-Correlation-ID", out var valor) && !string.IsNullOrWhiteSpace(valor)
