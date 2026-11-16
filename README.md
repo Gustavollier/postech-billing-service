@@ -120,6 +120,14 @@ montar orçamento, consumir a fila, compensar — continua funcionando.
 
 Swagger em `/swagger`.
 
+## Quem pode o quê
+
+O gateway valida o token; o serviço decide o que cada perfil alcança, lendo `role` e `ClienteId` do JWT repassado (`src/PosTech.Billing.Api/Acesso.cs`).
+
+Ler, aprovar e rejeitar um orçamento: a equipe em qualquer um, o cliente só no dele. O orçamento de outro cliente responde 404 — sem isso, aprovar (que cria a cobrança) e rejeitar (que cancela a ordem) estavam ao alcance de qualquer cliente autenticado.
+
+Sem token, 401. O webhook do Mercado Pago e o `/health` continuam públicos.
+
 ## Rodar local
 
 ```bash
